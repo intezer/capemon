@@ -1204,6 +1204,62 @@ BOOL loader_lock_held()
 	return (HANDLE)(DWORD_PTR)GetCurrentThreadId() == peb->LoaderLock->OwningThread;
 }
 
+// Critical section protecting the process heap, located at runtime by init_process_heap_lock().
+// NULL if it could not be identified (e.g. segment heap), in which case is_process_heap_lock_held()
+// always returns FALSE.
+static RTL_CRITICAL_SECTION *g_process_heap_lock;
+
+static BOOLEAN is_owned_by_current_thread(RTL_CRITICAL_SECTION *cs)
+{
+	BOOLEAN ret = FALSE;
+	__try {
+		ret = cs->OwningThread == (HANDLE)(DWORD_PTR)GetCurrentThreadId() && cs->RecursionCount > 0;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		ret = FALSE;
+	}
+	return ret;
+}
+
+void init_process_heap_lock()
+{
+	// The NT heap keeps a pointer to its lock in the (undocumented) heap header. Rather than
+	// hard-coding its offset, take the lock and look for the critical section we now own.
+	PBYTE heap = (PBYTE)GetProcessHeap();
+	RTL_CRITICAL_SECTION *found = NULL;
+	unsigned int offset;
+
+	if (!heap || !HeapLock(heap))
+		return;
+	for (offset = 0; offset < 0x400; offset += sizeof(PVOID)) {
+		RTL_CRITICAL_SECTION *cs = NULL;
+		__try {
+			cs = *(RTL_CRITICAL_SECTION **)(heap + offset);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			break;
+		}
+		if (cs && is_owned_by_current_thread(cs)) {
+			found = cs;
+			break;
+		}
+	}
+	HeapUnlock(heap);
+
+	if (found && !is_owned_by_current_thread(found))
+		g_process_heap_lock = found;
+}
+
+BOOLEAN is_process_heap_lock_identified()
+{
+	return g_process_heap_lock != NULL;
+}
+
+BOOLEAN is_process_heap_lock_held()
+{
+	return g_process_heap_lock && is_owned_by_current_thread(g_process_heap_lock);
+}
+
 uint32_t path_from_handle(HANDLE handle,
 	wchar_t *path, uint32_t path_buffer_len)
 {

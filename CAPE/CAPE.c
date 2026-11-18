@@ -122,6 +122,7 @@ typedef SIZE_T (WINAPI *_RtlCompareMemory)(
 
 extern _RtlCompareMemory pRtlCompareMemory;
 extern BOOLEAN is_image_base_remapped(HMODULE BaseAddress);
+extern BOOLEAN is_process_heap_lock_identified();
 extern uint32_t path_from_handle(HANDLE handle, wchar_t *path, uint32_t path_buffer_len);
 extern wchar_t *ensure_absolute_unicode_path(wchar_t *out, const wchar_t *in);
 extern void hook_enable();
@@ -1014,6 +1015,7 @@ PTRACKEDREGION AddTrackedRegion(PVOID Address, ULONG Protect)
 	BOOL PageAlreadyTracked = FALSE;
 	unsigned int NumberOfTrackedRegions = 0;
 	PTRACKEDREGION TrackedRegion, PreviousTrackedRegion = NULL;
+	MEMORY_BASIC_INFORMATION MemInfo;
 
 	if (!Address)
 		return NULL;
@@ -1036,6 +1038,13 @@ PTRACKEDREGION AddTrackedRegion(PVOID Address, ULONG Protect)
 	if (GetPageAddress(Address) == GetPageAddress(TrackedRegionList))
 	{
 		DebugOutput("AddTrackedRegion: Warning - attempting to track the page (0x%p) containing the tracked region list at 0x%p.\n", Address, TrackedRegionList);
+		return NULL;
+	}
+
+	// Query before touching the list so a failure doesn't leave an empty node linked in
+	if (!VirtualQuery(Address, &MemInfo, sizeof(MEMORY_BASIC_INFORMATION)))
+	{
+		ErrorOutput("AddTrackedRegion: unable to query memory region 0x%p", Address);
 		return NULL;
 	}
 
@@ -1067,11 +1076,7 @@ PTRACKEDREGION AddTrackedRegion(PVOID Address, ULONG Protect)
 #endif
 	}
 
-	if (!VirtualQuery(Address, &TrackedRegion->MemInfo, sizeof(MEMORY_BASIC_INFORMATION)))
-	{
-		ErrorOutput("AddTrackedRegion: unable to query memory region 0x%p", Address);
-		return NULL;
-	}
+	TrackedRegion->MemInfo = MemInfo;
 
 	TrackedRegion->AllocationBase = TrackedRegion->MemInfo.AllocationBase;
 
@@ -3971,6 +3976,7 @@ void CAPE_post_init()
 	char CommandLine[MAX_UNICODE_PATH];
 	SanitiseString(CommandLine, GetCommandLineA(), sizeof(CommandLine));
 	DebugOutput("Commandline: %s\n", CommandLine);
+	DebugOutput("Process heap lock %s.\n", is_process_heap_lock_identified() ? "identified" : "not identified, caller_dispatch heap-lock guard inactive");
 }
 
 void CAPE_init()

@@ -653,6 +653,8 @@ BOOL APIENTRY DllMain(HANDLE hModule, DWORD dwReason, LPVOID lpReserved)
 
 		init_private_heap();
 
+		init_process_heap_lock();
+
 		set_os_bitness();
 
 		// initialize file stuff, needs to be performed prior to any file normalization

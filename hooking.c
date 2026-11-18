@@ -99,6 +99,11 @@ static void caller_dispatch(hook_info_t *hookinfo, ULONG_PTR addr)
 		return;
 	if (!g_config.unpacker)
 		return;
+	// The caller may be inside the heap manager with the process heap locked (e.g.
+	// RtlpExtendHeap -> NtAllocateVirtualMemory). Anything below can allocate from the process
+	// heap (FormatMessage, pipe I/O, scans), and re-entering it there corrupts the heap.
+	if (is_process_heap_lock_held())
+		return;
 
 	PVOID AllocationBase = GetAllocationBase((PVOID)addr);
 	if (!AllocationBase || !g_dll_main_complete || hookinfo->main_caller_retaddr)
@@ -135,7 +140,9 @@ static int set_caller_info(void *_hook_info, ULONG_PTR addr)
 {
 	hook_info_t *hookinfo = _hook_info;
 
-	if (!is_in_dll_range(addr) && !inside_hook((PVOID)addr) && !InsideMonitor(NULL, (PVOID)addr)) {
+	// Frame-pointer walks can pick up stack data (e.g. /GS cookies, SEH scope tables) in place of
+	// return addresses when a frame omits or biases EBP, so only accept executable memory.
+	if (!is_in_dll_range(addr) && !inside_hook((PVOID)addr) && !InsideMonitor(NULL, (PVOID)addr) && IsAddressExecutable((PVOID)addr)) {
 		caller_dispatch(hookinfo, addr);
 		if (hookinfo->main_caller_retaddr == 0)
 			hookinfo->main_caller_retaddr = addr;
